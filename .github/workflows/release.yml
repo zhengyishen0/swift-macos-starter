@@ -45,26 +45,72 @@ jobs:
 
           rm $RUNNER_TEMP/certificate.p12
 
+      # ============================================================
+      # CONFIGURE: Update these values for your app
+      # ============================================================
+      # - __APP_NAME__: Your app name (e.g., MyApp)
+      # - __DEVELOPER_NAME__: Your name as in certificate (e.g., John Doe)
+      # - __XCODEPROJ__: Your .xcodeproj name (e.g., MyApp.xcodeproj)
+      # - __SCHEME__: Your Xcode scheme name (e.g., MyApp)
+      # ============================================================
+
       - name: Build and Archive
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          # Update version in Info.plist
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" VocaApp/Info.plist
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" VocaApp/Info.plist
-
           xcodebuild clean archive \
-            -project VocaApp.xcodeproj \
-            -scheme Voca \
+            -project __APP_NAME__.xcodeproj \
+            -scheme __APP_NAME__ \
             -configuration Release \
-            -archivePath build/Voca.xcarchive \
-            CODE_SIGN_IDENTITY="Developer ID Application: Zhengyi Shen ($APPLE_TEAM_ID)" \
+            -archivePath build/__APP_NAME__.xcarchive \
+            ARCHS="arm64 x86_64" \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGN_IDENTITY="Developer ID Application: __DEVELOPER_NAME__ ($APPLE_TEAM_ID)" \
             CODE_SIGN_STYLE=Manual \
-            DEVELOPMENT_TEAM=$APPLE_TEAM_ID
+            DEVELOPMENT_TEAM=$APPLE_TEAM_ID \
+            MARKETING_VERSION=$VERSION \
+            CURRENT_PROJECT_VERSION=$BUILD_NUMBER
 
-          # Verify signature
-          codesign --verify --deep --strict build/Voca.xcarchive/Products/Applications/Voca.app
+          codesign --verify --deep --strict build/__APP_NAME__.xcarchive/Products/Applications/__APP_NAME__.app
           echo "Build and signing completed successfully"
+
+      # ============================================================
+      # SPARKLE: Re-sign Sparkle binaries (required for notarization)
+      # Remove this section if not using Sparkle
+      # ============================================================
+      - name: Re-sign Sparkle binaries for notarization
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          APP_PATH="build/__APP_NAME__.xcarchive/Products/Applications/__APP_NAME__.app"
+          SPARKLE_PATH="$APP_PATH/Contents/Frameworks/Sparkle.framework"
+          IDENTITY="Developer ID Application: __DEVELOPER_NAME__ ($APPLE_TEAM_ID)"
+
+          # Check if Sparkle exists
+          if [ -d "$SPARKLE_PATH" ]; then
+            echo "Re-signing Sparkle binaries..."
+            codesign --force --options runtime --timestamp --sign "$IDENTITY" \
+              "$SPARKLE_PATH/Versions/B/XPCServices/Downloader.xpc/Contents/MacOS/Downloader"
+            codesign --force --options runtime --timestamp --sign "$IDENTITY" \
+              "$SPARKLE_PATH/Versions/B/XPCServices/Downloader.xpc"
+            codesign --force --options runtime --timestamp --sign "$IDENTITY" \
+              "$SPARKLE_PATH/Versions/B/XPCServices/Installer.xpc/Contents/MacOS/Installer"
+            codesign --force --options runtime --timestamp --sign "$IDENTITY" \
+              "$SPARKLE_PATH/Versions/B/XPCServices/Installer.xpc"
+            codesign --force --options runtime --timestamp --sign "$IDENTITY" \
+              "$SPARKLE_PATH/Versions/B/Updater.app/Contents/MacOS/Updater"
+            codesign --force --options runtime --timestamp --sign "$IDENTITY" \
+              "$SPARKLE_PATH/Versions/B/Updater.app"
+            codesign --force --options runtime --timestamp --sign "$IDENTITY" \
+              "$SPARKLE_PATH/Versions/B/Autoupdate"
+            codesign --force --options runtime --timestamp --sign "$IDENTITY" \
+              "$SPARKLE_PATH"
+            codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP_PATH"
+            codesign --verify --deep --strict "$APP_PATH"
+            echo "Sparkle re-signing completed"
+          else
+            echo "Sparkle not found, skipping re-sign"
+          fi
 
       - name: Notarize App
         env:
@@ -72,17 +118,30 @@ jobs:
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          ditto -c -k --keepParent "build/Voca.xcarchive/Products/Applications/Voca.app" "Voca-notarize.zip"
+          ditto -c -k --keepParent "build/__APP_NAME__.xcarchive/Products/Applications/__APP_NAME__.app" "notarize.zip"
 
-          xcrun notarytool submit "Voca-notarize.zip" \
+          SUBMIT_OUTPUT=$(xcrun notarytool submit "notarize.zip" \
             --apple-id "$APPLE_ID" \
             --team-id "$APPLE_TEAM_ID" \
             --password "$APPLE_APP_PASSWORD" \
-            --wait
+            --wait 2>&1) || true
 
-          xcrun stapler staple "build/Voca.xcarchive/Products/Applications/Voca.app"
+          echo "$SUBMIT_OUTPUT"
 
-          rm "Voca-notarize.zip"
+          SUBMISSION_ID=$(echo "$SUBMIT_OUTPUT" | grep "id:" | head -1 | awk '{print $2}')
+          if echo "$SUBMIT_OUTPUT" | grep -q "status: Invalid"; then
+            echo "Notarization failed, fetching log..."
+            xcrun notarytool log "$SUBMISSION_ID" \
+              --apple-id "$APPLE_ID" \
+              --team-id "$APPLE_TEAM_ID" \
+              --password "$APPLE_APP_PASSWORD" \
+              notarization_log.json
+            cat notarization_log.json
+            exit 1
+          fi
+
+          xcrun stapler staple "build/__APP_NAME__.xcarchive/Products/Applications/__APP_NAME__.app"
+          rm "notarize.zip"
           echo "Notarization completed successfully"
 
       - name: Install create-dmg
@@ -91,51 +150,103 @@ jobs:
       - name: Create DMG
         run: |
           create-dmg \
-            --volname "Voca" \
+            --volname "__APP_NAME__" \
             --window-pos 200 120 \
             --window-size 600 400 \
             --icon-size 100 \
-            --icon "Voca.app" 150 185 \
+            --icon "__APP_NAME__.app" 150 185 \
             --app-drop-link 450 185 \
-            "Voca-${{ env.VERSION }}.dmg" \
-            "build/Voca.xcarchive/Products/Applications/Voca.app"
+            "__APP_NAME__-${{ env.VERSION }}.dmg" \
+            "build/__APP_NAME__.xcarchive/Products/Applications/__APP_NAME__.app"
 
-      - name: Calculate DMG SHA256
+      - name: Calculate DMG SHA256 and size
         run: |
-          SHA256=$(shasum -a 256 "Voca-${{ env.VERSION }}.dmg" | cut -d ' ' -f 1)
+          SHA256=$(shasum -a 256 "__APP_NAME__-${{ env.VERSION }}.dmg" | cut -d ' ' -f 1)
+          DMG_SIZE=$(stat -f%z "__APP_NAME__-${{ env.VERSION }}.dmg")
           echo "SHA256=$SHA256" >> $GITHUB_ENV
+          echo "DMG_SIZE=$DMG_SIZE" >> $GITHUB_ENV
+
+      # ============================================================
+      # SPARKLE: Sign update and update appcast.xml
+      # Remove this section if not using Sparkle
+      # Requires: SPARKLE_PRIVATE_KEY secret
+      # ============================================================
+      - name: Sign update with Sparkle EdDSA
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          if [ -z "$SPARKLE_PRIVATE_KEY" ]; then
+            echo "SPARKLE_PRIVATE_KEY not set, skipping Sparkle signing"
+            exit 0
+          fi
+
+          curl -L -o Sparkle.tar.xz "https://github.com/sparkle-project/Sparkle/releases/download/2.6.4/Sparkle-2.6.4.tar.xz"
+          tar -xf Sparkle.tar.xz
+
+          SIGN_OUTPUT=$(echo "$SPARKLE_PRIVATE_KEY" | ./bin/sign_update "__APP_NAME__-${{ env.VERSION }}.dmg" -f -)
+          echo "Sign output: $SIGN_OUTPUT"
+          SIGNATURE=$(echo "$SIGN_OUTPUT" | sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p')
+          echo "SPARKLE_SIGNATURE=$SIGNATURE" >> $GITHUB_ENV
+          echo "Extracted signature: $SIGNATURE"
+
+      - name: Update appcast.xml
+        run: |
+          if [ -z "$SPARKLE_SIGNATURE" ]; then
+            echo "No Sparkle signature, skipping appcast update"
+            exit 0
+          fi
+
+          if [ ! -f "appcast.xml" ]; then
+            echo "appcast.xml not found, skipping"
+            exit 0
+          fi
+
+          PUBDATE=$(date -R)
+
+          echo "    <item>" > new_item.xml
+          echo "      <title>Version ${VERSION}</title>" >> new_item.xml
+          echo "      <pubDate>${PUBDATE}</pubDate>" >> new_item.xml
+          echo "      <sparkle:version>${BUILD_NUMBER}</sparkle:version>" >> new_item.xml
+          echo "      <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>" >> new_item.xml
+          echo "      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>" >> new_item.xml
+          echo "      <enclosure" >> new_item.xml
+          echo "        url=\"https://github.com/${{ github.repository }}/releases/download/v${VERSION}/__APP_NAME__-${VERSION}.dmg\"" >> new_item.xml
+          echo "        sparkle:edSignature=\"${SPARKLE_SIGNATURE}\"" >> new_item.xml
+          echo "        length=\"${DMG_SIZE}\"" >> new_item.xml
+          echo "        type=\"application/octet-stream\"/>" >> new_item.xml
+          echo "    </item>" >> new_item.xml
+
+          sed -i '' "/<language>en<\/language>/r new_item.xml" appcast.xml
+          rm new_item.xml
+          cat appcast.xml
+
+      - name: Commit appcast.xml
+        run: |
+          if [ ! -f "appcast.xml" ]; then
+            echo "appcast.xml not found, skipping commit"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add appcast.xml
+          git diff --staged --quiet || git commit -m "Update appcast.xml for v${{ env.VERSION }}"
+          git push origin HEAD:main || true
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          files: Voca-${{ env.VERSION }}.dmg
+          files: __APP_NAME__-${{ env.VERSION }}.dmg
           body: |
-            ## Voca ${{ env.VERSION }}
-
-            **Voice-to-text transcription for macOS.**
+            ## __APP_NAME__ ${{ env.VERSION }}
 
             ### Installation
-
-            **Download**
-            1. Download `Voca-${{ env.VERSION }}.dmg`
-            2. Open the DMG and drag Voca to Applications
-            3. Grant Accessibility and Microphone permissions when prompted
-
-            **Homebrew**
-            ```bash
-            brew install --cask zhengyishen0/voca/voca
-            ```
-
-            ### Usage
-
-            - Double-tap ⌘ to start recording
-            - Release ⌘ to transcribe and auto-paste
-            - ⌃⌥V to paste from history
-            - ESC to cancel during transcription
+            1. Download `__APP_NAME__-${{ env.VERSION }}.dmg`
+            2. Open the DMG and drag __APP_NAME__ to Applications
+            3. Grant required permissions when prompted
 
             ### Requirements
             - macOS 13.0 (Ventura) or later
-            - ~500MB for model downloads (first run)
 
             ---
             SHA256: `${{ env.SHA256 }}`
@@ -143,37 +254,3 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Update Homebrew Cask
-        env:
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-        run: |
-          git clone https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/zhengyishen0/homebrew-voca.git
-          cd homebrew-voca
-
-          cat > Casks/voca.rb << EOF
-          cask "voca" do
-            version "${VERSION}"
-            sha256 "${SHA256}"
-
-            url "https://github.com/zhengyishen0/voca-app/releases/download/v#{version}/Voca-#{version}.dmg"
-            name "Voca"
-            desc "Voice-to-text transcription for macOS menu bar"
-            homepage "https://github.com/zhengyishen0/voca-app"
-
-            depends_on macos: ">= :ventura"
-
-            app "Voca.app"
-
-            zap trash: [
-              "~/Library/Preferences/com.zhengyishen.voca.plist",
-              "~/Library/Application Support/Voca",
-            ]
-          end
-          EOF
-
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Casks/voca.rb
-          git commit -m "Update Voca to v${VERSION}"
-          git push

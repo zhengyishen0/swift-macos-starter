@@ -2,10 +2,14 @@
 import PackageDescription
 
 let package = Package(
-    name: "MyApp",
+    name: "__APP_NAME__",
     platforms: [.macOS(.v13)],
     products: [
-        .library(name: "MyAppLib", targets: ["MyAppLib"])
+        .library(name: "__APP_NAME__Lib", targets: ["__APP_NAME__Lib"])
+    ],
+    dependencies: [
+        // Sparkle for auto-updates (uncomment to enable)
+        // .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
     ],
     targets: [
         // Uncomment if using external xcframework:
@@ -14,9 +18,12 @@ let package = Package(
         //     path: "Frameworks/MyFramework.xcframework"
         // ),
         .target(
-            name: "MyAppLib",
-            // dependencies: ["MyFramework"],
-            path: "MyApp",
+            name: "__APP_NAME__Lib",
+            dependencies: [
+                // "MyFramework",
+                // .product(name: "Sparkle", package: "Sparkle"),
+            ],
+            path: "__APP_NAME__",
             resources: [.copy("Resources")]
         )
     ]

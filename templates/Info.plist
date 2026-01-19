@@ -28,5 +28,14 @@
     <true/>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright © 2024. All rights reserved.</string>
+    <!-- Sparkle Auto-Update (uncomment and configure) -->
+    <!--
+    <key>SUFeedURL</key>
+    <string>https://yourdomain.com/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>YOUR_PUBLIC_EDDSA_KEY</string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
+    -->
 </dict>
 </plist>

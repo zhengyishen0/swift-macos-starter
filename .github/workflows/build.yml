@@ -17,11 +17,17 @@ jobs:
       - name: Show Xcode version
         run: xcodebuild -version
 
+      # ============================================================
+      # CONFIGURE: Update these values for your app
+      # ============================================================
+      # - __APP_NAME__: Your app name (e.g., MyApp)
+      # ============================================================
+
       - name: Build
         run: |
           xcodebuild build \
-            -project VocaApp.xcodeproj \
-            -scheme Voca \
+            -project __APP_NAME__.xcodeproj \
+            -scheme __APP_NAME__ \
             -configuration Release \
             ARCHS=arm64 \
             CODE_SIGN_IDENTITY="-" \
